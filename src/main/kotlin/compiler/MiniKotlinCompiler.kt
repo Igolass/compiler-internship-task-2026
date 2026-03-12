@@ -38,7 +38,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         // Our main component, we place the transpiled code into StringBuilder to get our output
         val transpiled_text: StringBuilder = StringBuilder()
         transpiled_text
-            .append(File("stdlib/src/main/java/Continuation.java").readText().trimIndent() + "\n\n")
             .append("public class $className {\n")
             .append(visit(program) + "\n")
             .append("}")
@@ -50,16 +49,15 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     override fun visitProgram(ctx: MiniKotlinParser.ProgramContext): String {
         val transpiledText = StringBuilder()
 
-        // a program is defined as a non-zero set of functions - as such, we isolate the functions and parse them individually
+        // a program is defined as a non-zero series of functions - hence we isolate and parse them individually, their parsing will not interact with each other
         val functions = ctx.functionDeclaration()
         for (function in functions) {
-            transpiledText.append(visit(function) + "\n")
+            transpiledText.append(visit(function) + "\n\n")
         }
         return transpiledText.toString()
     }
 
     override fun visitFunctionDeclaration(ctx: MiniKotlinParser.FunctionDeclarationContext): String {
-        // get the function signature and body
         val name = ctx.IDENTIFIER().text
         val parameters = ctx.parameterList()?.parameter() ?: emptyList<MiniKotlinParser.ParameterContext>()
         val rType = ctx.type().text
@@ -72,7 +70,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
         encounteredFunctions.add(name)
 
-        // technically, the grammar defines [parameter, parameter(0..any)] and cannot be empty, but let's be clean and diligent
         val transpiledParameters: String = if (parameters.isEmpty()) {
             ""
         } else {
@@ -92,16 +89,13 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             }
             "public static void $name($correctedParameters)"
         }
-
         val transpiledBody = visit(fBlock)
 
-        val transpiledFunctionDeclaration: String =
-            """
+        return """
         $transpiledSignature {
             $transpiledBody
         }
         """.trimIndent()
-        return transpiledFunctionDeclaration
     }
 
     override fun visitBlock(ctx: MiniKotlinParser.BlockContext): String {
@@ -116,6 +110,10 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
 
         // as we transpile backwards, we keep track of transpiled code
         val futureCodeList: ArrayDeque<String> = ArrayDeque()
+        // we must account for the case of a :Unit function that is full of trivial expressions and has no return, for these purposes we inject a dummy return at the end
+        if (shouldPrefixStatementsWithReturn(ctx.parent as ParserRuleContext)) {
+            futureCodeList.addLast("return")
+        }
 
         while (statementStack.isNotEmpty()) {
             // pop statement, get its actual ruleContext since that is how ANTLR works with such rules
@@ -134,6 +132,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 futureCodeList.addLast(wrapped)
             } else {
                 // we do not require CPS, so transpile this lucky piece of code directly and prepend it
+                // these overridden invocations begin at :+8
                 futureCodeList.addFirst(visit(actualStatement))
             }
         }
@@ -141,25 +140,34 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         return futureCodeList.joinToString("\n")
     }
 
-    // TODO: we actually need these for the non-nested expressions, uncomment and implement so they can be called by :137
-    /** intentionally unimplemented, these shouldn't even be called or present in the call-stack at any point
-    override fun visitStatement(ctx: MiniKotlinParser.StatementContext): String {
-    //
-    }
-
+    // these are only going to be invoked in the trivial situation where we have nothing inside these of them to unravel, as such they can treat their contents as trivial for purposes of CPS
     override fun visitVariableDeclaration(ctx: MiniKotlinParser.VariableDeclarationContext): String {
-    //
+        val vName = ctx.IDENTIFIER().text
+        val vType = syntaxMapper[ctx.type().text]
+        val vValue = visit(ctx.expression())
+
+        return "$vType $vName = $vValue;"
     }
 
     override fun visitVariableAssignment(ctx: MiniKotlinParser.VariableAssignmentContext): String {
-    //
+        val vName = ctx.IDENTIFIER().text
+        val vValue = visit(ctx.expression())
+        return "$vName = $vValue;"
     }
 
+    /**
     override fun visitIfStatement(ctx: MiniKotlinParser.IfStatementContext): String {
-    //
+        //
     }
 
     override fun visitWhileStatement(ctx: MiniKotlinParser.WhileStatementContext): String {
+        //
+    }
+    */
+
+    // TODO: we actually need these for the non-nested expressions, uncomment and implement so they can be called by :137
+    /** intentionally unimplemented, these shouldn't even be called or present in the call-stack at any point
+    override fun visitStatement(ctx: MiniKotlinParser.StatementContext): String {
     //
     }
 
@@ -236,8 +244,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         return "($arg)"
     }
 
-    // CONT from primary
-    // nothing much to do with the following except return their text as per the grammar
+    // CONT from primary, most are trivial
     override fun visitIntLiteral(ctx: MiniKotlinParser.IntLiteralContext): String {
         return ctx.text
     }
@@ -261,6 +268,18 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
 
         return arguments.joinToString(", ") { expressionCtx -> visit(expressionCtx) }
+    }
+
+    /** Helpers */
+    // we are looking back here, which I am not a fan of, but this is the cleanest stateless way to achieve the desired functionality
+    private fun shouldPrefixStatementsWithReturn(ctx: ParserRuleContext): Boolean {
+        return when (ctx) {
+            is MiniKotlinParser.FunctionDeclarationContext -> ctx.type().text == "Unit" && ctx.IDENTIFIER().text != "main"
+            // these can contain a block by grammar definition, but shouldn't interact with this functionality
+            is MiniKotlinParser.IfStatementContext -> false
+            is MiniKotlinParser.WhileStatementContext -> false
+            else -> throw IllegalStateException("Attempting to read return type of a ${ctx.javaClass.simpleName}")
+        }
     }
 
     private fun requiresCPS(ctx: ParserRuleContext): Boolean {
@@ -300,9 +319,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             is MiniKotlinParser.ReturnStatementContext -> {
                 val expression = ctx.expression() ?: return "__continuation.accept(null);\nreturn;"
 
-                unrollExpression(expression) { finalResult ->
-                    "__continuation.accept(${finalResult});\nreturn;"
-                }
+                unrollExpression(expression) { finalResult -> "__continuation.accept(${finalResult});\nreturn;" }
             }
 
             is MiniKotlinParser.FunctionCallExprContext -> {
@@ -369,51 +386,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             // is MiniKotlinParser.WhileStatementContext -> {}
 
             else -> throw IllegalStateException("Unsupported context type for CPS wrapping: ${ctx.javaClass.simpleName}")
-        }
-    }
-
-    // the recommended strategy for nested expressions is called "lifting", let's do it!
-    private fun liftCallFromExpression(ctx: ParserRuleContext, finalContinuation: String): String {
-        return when (ctx) {
-            is MiniKotlinParser.FunctionCallExprContext -> {
-                val funcName = ctx.IDENTIFIER().text
-                val args = visit(ctx.argumentList())
-                val argCPS = "arg${nestingCounter++}"
-
-                """
-                $funcName($args, ($argCPS) -> {
-                    $finalContinuation.accept($argCPS);
-                    return;
-                });
-                """.trimIndent()
-            }
-
-            // ovde treba da se generalizuje jer moze biti +, -, *, / itd
-            is MiniKotlinParser.MulDivExprContext -> {
-                val left = ctx.expression(0)
-                val right = ctx.expression(1)
-                val op = ctx.getChild(1).text
-
-                if (containsFunctionCall(right)) {
-                    // Logic: factorial(n-1, (res) -> { __cont.accept(n * res); })
-                    val leftVal = visit(left)
-                    val tempVar = "res${nestingCounter++}"
-                    val callCtx = right as MiniKotlinParser.FunctionCallExprContext
-                    val funcName = callCtx.IDENTIFIER().text
-                    val args = visit(callCtx.argumentList())
-
-                    """
-                    $funcName($args, ($tempVar) -> {
-                        $finalContinuation.accept($leftVal $op $tempVar);
-                        return;
-                    });
-                    """.trimIndent()
-                } else {
-                    // If the call is on the left, swap the logic...
-                    "// ... similar logic for left side ..."
-                }
-            }
-            else -> "// Fallback"
         }
     }
 
