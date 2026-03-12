@@ -35,7 +35,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     private var encounteredVariables: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
     fun compile(program: MiniKotlinParser.ProgramContext, className: String = "MiniProgram"): String {
-        // Our main component, we place the transpiled code into StringBuilder to get our output
         val transpiled_text: StringBuilder = StringBuilder()
         transpiled_text
             .append("public class $className {\n")
@@ -44,7 +43,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
 
         return transpiled_text.toString()
     }
-
 
     override fun visitProgram(ctx: MiniKotlinParser.ProgramContext): String {
         val transpiledText = StringBuilder()
@@ -100,7 +98,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
 
     override fun visitBlock(ctx: MiniKotlinParser.BlockContext): String {
         val statements = ctx.statement()
-        // similar to parameters, grammar guarantees that there is at least one statement but diligence
         if (statements.isEmpty()) {
             return ""
         }
@@ -108,7 +105,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         val statementStack: ArrayDeque<ParserRuleContext> = ArrayDeque()
         statements.forEach { statementStack.addLast(it) }
 
-        // as we transpile backwards, we keep track of transpiled code
         val futureCodeList: ArrayDeque<String> = ArrayDeque()
         // we must account for the case of a :Unit function that is full of trivial expressions and has no return, for these purposes we inject a dummy return at the end
         if (shouldPrefixStatementsWithReturn(ctx.parent as ParserRuleContext)) {
@@ -132,11 +128,11 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 futureCodeList.addLast(wrapped)
             } else {
                 // we do not require CPS, so transpile this lucky piece of code directly and prepend it
-                // these overridden invocations begin at :+8
                 futureCodeList.addFirst(visit(actualStatement))
             }
         }
 
+        // TODO: in order to fix the indent, lets make a custom joinToString method that works by popping, indenting, and repeating
         return futureCodeList.joinToString("\n")
     }
 
@@ -155,28 +151,22 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         return "$vName = $vValue;"
     }
 
-    /**
+    /** intentionally unimplemented, these shouldn't even be called or present in the call-stack at any point
+     * because they will always be treated as CPS
+    override fun visitReturnStatement(ctx: MiniKotlinParser.ReturnStatementContext): String {
+        //
+    }
+
+    override fun visitFunctionCallExpr(ctx: MiniKotlinParser.FunctionCallExprContext): String {
+        //
+    }
+
     override fun visitIfStatement(ctx: MiniKotlinParser.IfStatementContext): String {
         //
     }
 
     override fun visitWhileStatement(ctx: MiniKotlinParser.WhileStatementContext): String {
         //
-    }
-    */
-
-    // TODO: we actually need these for the non-nested expressions, uncomment and implement so they can be called by :137
-    /** intentionally unimplemented, these shouldn't even be called or present in the call-stack at any point
-    override fun visitStatement(ctx: MiniKotlinParser.StatementContext): String {
-    //
-    }
-
-    override fun visitReturnStatement(ctx: MiniKotlinParser.ReturnStatementContext): String {
-    val expr = ctx.expression()
-    }
-
-    override fun visitFunctionCallExpr(ctx: MiniKotlinParser.FunctionCallExprContext): String {
-    //
     }
      */
 
@@ -317,9 +307,16 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     private fun wrapInCPS(ctx: ParserRuleContext, fCode: String): String {
         return when (ctx) {
             is MiniKotlinParser.ReturnStatementContext -> {
-                val expression = ctx.expression() ?: return "__continuation.accept(null);\nreturn;"
+                val expression = ctx.expression() ?: return """
+                    __continuation.accept(null);
+                    return;
+                """.trimIndent()
 
-                unrollExpression(expression) { finalResult -> "__continuation.accept(${finalResult});\nreturn;" }
+                unrollExpression(expression) { finalResult -> """
+                    __continuation.accept(${finalResult});
+                    return;
+                """.trimIndent()
+                }
             }
 
             is MiniKotlinParser.FunctionCallExprContext -> {
@@ -370,20 +367,40 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             is MiniKotlinParser.IfStatementContext -> {
                 val condition = visit(ctx.expression())
                 // visit the branches, false might not exist, so we have to be more careful with it
-                val tBranch = visit(ctx.block(0))
-                val fBranch = ctx.block(1)?.let { visit(it) } ?: "__continuation.accept(null);\nreturn;"
+                val tBranch = visitBlockWithContinuation(ctx.block(0), fCode)
+                val fBranch = if (ctx.block().size > 1) {
+                    """ else {
+                        ${visitBlockWithContinuation(ctx.block(1), fCode)}
+                    }
+                    """.trimIndent()
+                } else {
+                    ""
+                }
 
                 """
                 if ($condition) {
                     $tBranch
-                } else {
-                    $fBranch
-                }
+                } $fBranch
                 """.trimIndent()
             }
 
-            // TODO: implement this. It appears that while is a generally problematic loop for CPS, internet suggests an object-based approach
-            // is MiniKotlinParser.WhileStatementContext -> {}
+            is MiniKotlinParser.WhileStatementContext -> {
+                val condition = visit(ctx.expression())
+                val body = visit(ctx.block())
+
+                """
+                new Object() {
+                    public void loop() {
+                       if ($condition) {
+                           $body
+                           this.loop();
+                       } else {
+                           $fCode
+                       }
+                    }
+                }.loop();
+                """.trimIndent()
+            }
 
             else -> throw IllegalStateException("Unsupported context type for CPS wrapping: ${ctx.javaClass.simpleName}")
         }
@@ -395,13 +412,16 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
 
         if (ctx is MiniKotlinParser.FunctionCallExprContext) {
-            val funcName = ctx.IDENTIFIER().text
+            var functionName = ctx.IDENTIFIER().text
+            if (functionName.contains("print")) {
+                functionName = "Prelude.println"
+            }
+
             val arguments = visit(ctx.argumentList())
             val argCPS = "arg${nestingCounter++}"
 
-
             return """
-            $funcName($arguments, ($argCPS) -> {
+            $functionName($arguments, ($argCPS) -> {
                 ${onComplete(argCPS)}
             });
             """.trimIndent()
@@ -422,5 +442,39 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
 
         return onComplete(visit(ctx))
+    }
+
+    // to not change the overridable implementation of the visitBlock(),
+    // we make an alternative for cases that require block processing which accepts a future, for example processing blocks inside if-else and while
+    private fun visitBlockWithContinuation(ctx: MiniKotlinParser.BlockContext, tailCode: String): String {
+        val statements = ctx.statement()
+        if (statements.isEmpty()) {
+            return tailCode
+        }
+
+        val statementStack: ArrayDeque<ParserRuleContext> = ArrayDeque()
+        statements.forEach { statementStack.addLast(it) }
+        val futureCodeList: ArrayDeque<String> = ArrayDeque()
+        futureCodeList.addLast(tailCode)
+
+        while (statementStack.isNotEmpty()) {
+            val statement = statementStack.removeLast()
+            val actualStatement = if (statement is MiniKotlinParser.StatementContext) {
+                statement.getChild(0) as ParserRuleContext
+            } else {
+                statement
+            }
+
+            if (requiresCPS(actualStatement)) {
+                val joinedFuture = futureCodeList.joinToString("\n")
+                val wrapped = wrapInCPS(actualStatement, joinedFuture)
+                futureCodeList.clear()
+                futureCodeList.addLast(wrapped)
+            } else {
+                futureCodeList.addFirst(visit(actualStatement))
+            }
+        }
+
+        return futureCodeList.joinToString("\n")
     }
 }
