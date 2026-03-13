@@ -7,6 +7,29 @@ fun factorial(n: Int): Int {
     }
 }
 
+fun complicatedVarAssignDeclare(x: Int): Unit {
+    var y: Int = 7 + factorial(x)
+    println(y)
+}
+
+fun complicatedSum(x: Int, y: Int): Int {
+    return factorial(x) + factorial(y)
+}
+
+fun countdown(n: Int): Unit {
+    var i: Int = n
+    while (i > 0) {
+        println(i)
+        i = i - 1
+    }
+    println("finished")
+}
+
+fun returnsPlusFive(x: Int): Int {
+    var y: Int = x + 5
+    return y
+}
+
 fun main(): Unit {
     var result: Int = factorial(5)
     println(result)
