@@ -6,7 +6,6 @@ import MiniKotlinParser
 // our additions to the import block
 import org.antlr.v4.runtime.ParserRuleContext
 import org.antlr.v4.runtime.RuleContext
-import java.io.File
 
 class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     // mapping Kotlin->Java syntax equivalents as map, so we can easily transpile syntax
@@ -35,13 +34,13 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     private var encounteredVariables: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
     fun compile(program: MiniKotlinParser.ProgramContext, className: String = "MiniProgram"): String {
-        val transpiled_text: StringBuilder = StringBuilder()
-        transpiled_text
+        val transpiledText: StringBuilder = StringBuilder()
+        transpiledText
             .append("public class $className {\n")
             .append(visit(program) + "\n")
             .append("}")
 
-        return transpiled_text.toString()
+        return transpiledText.toString()
     }
 
     override fun visitProgram(ctx: MiniKotlinParser.ProgramContext): String {
@@ -104,7 +103,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         val futureCodeList: ArrayDeque<String> = ArrayDeque()
         // we must account for the case of a :Unit function that is full of trivial expressions and has no return, for these purposes we inject a dummy return at the end
         if (shouldPrefixStatementsWithReturn(ctx.parent as ParserRuleContext)) {
-            futureCodeList.addLast("return")
+            futureCodeList.addLast("__continuation.accept(null);\nreturn;")
         }
 
         while (statementStack.isNotEmpty()) {
@@ -328,27 +327,31 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
 
             is MiniKotlinParser.VariableDeclarationContext -> {
                 val vName = ctx.IDENTIFIER().text
+                val vType = syntaxMapper[ctx.type().text]
+                val expression = ctx.expression()
 
-                val callExpression = ctx.expression() as MiniKotlinParser.FunctionCallExprContext
-                val callFuncName = callExpression.IDENTIFIER().text
-                val callArguments = visit(callExpression.argumentList())
-
-                val correctedWrappingFutureCode = if (fCode != "") {
-                    "\n${fCode.prependIndent("    ")}\n"
-                } else {
-                    ""
+                unrollExpression(expression) { finalResult ->
+                    val assignment = "$vType $vName = $finalResult;"
+                    if (fCode != "") {
+                        "$assignment\n$fCode"
+                    } else {
+                        assignment
+                    }
                 }
-                "$callFuncName($callArguments, ($vName) -> {$correctedWrappingFutureCode});"
             }
 
             is MiniKotlinParser.VariableAssignmentContext -> {
                 val vName = ctx.IDENTIFIER().text
+                val expression = ctx.expression()
 
-                val callExpression = ctx.expression() as MiniKotlinParser.FunctionCallExprContext
-                val callFuncName = callExpression.IDENTIFIER().text
-                val callArguments = visit(callExpression.argumentList())
-
-                "$callFuncName($callArguments, ($vName) -> {\n${fCode.prependIndent("    ")}\n});"
+                unrollExpression(expression) { finalResult ->
+                    val assignment = "$$vName = $finalResult;"
+                    if (fCode != "") {
+                        "$assignment\n$fCode"
+                    } else {
+                        assignment
+                    }
+                }
             }
 
             is MiniKotlinParser.IfStatementContext -> {
