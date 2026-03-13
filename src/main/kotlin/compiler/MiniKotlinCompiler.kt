@@ -24,7 +24,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         "Char" to "Char",
          */
     ).withDefault({ key ->
-        println("$key not found, using wildcard")
+        // $key not found, using wildcard | alternatively, we can throw an exception
         "java.lang.Object"
     })
 
@@ -70,9 +70,15 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
         encounteredFunctions.add(name)
 
+        var boxedParameters: String = ""
         val transpiledParameters: String = if (parameters.isEmpty()) {
             ""
-        } else {
+        } else { // since we are boxing, we have to make sure to create a boxed version of the argument to pass into the function
+            boxedParameters = parameters.joinToString("\n") {
+                "final ${syntaxMapper[it.type().text]}[] __${it.IDENTIFIER().text} = new ${syntaxMapper[it.type().text]}[] { ${it.IDENTIFIER().text} };"
+            }
+            boxedParameters = "${boxedParameters.prependIndent("    ")}\n"
+
             parameters.joinToString(", ") {
                 "${syntaxMapper[it.type().text]} ${it.IDENTIFIER().text}"
             }
@@ -80,18 +86,18 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
 
         val transpiledSignature: String = if (name == "main") {
             "public static void main(String[] args)"
-        } else {
-            // remember CPS, we must correct the transpiled signature to include a Continuation
+        } else { // remember CPS, we must correct the transpiled signature to include a Continuation
             val correctedParameters: String = if (transpiledParameters == "") {
                 "Continuation<${syntaxMapper[rType]}> __continuation"
             } else {
                 "$transpiledParameters, Continuation<${syntaxMapper[rType]}> __continuation"
             }
+
             "public static void $name($correctedParameters)"
         }
         val transpiledBody = visit(fBlock)
 
-        return "$transpiledSignature {\n${transpiledBody.prependIndent("    ")}\n}"
+        return "$transpiledSignature {\n$boxedParameters${transpiledBody.prependIndent("    ")}\n}"
     }
 
     override fun visitBlock(ctx: MiniKotlinParser.BlockContext): String {
@@ -139,13 +145,13 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         val vType = syntaxMapper[ctx.type().text]
         val vValue = visit(ctx.expression())
 
-        return "$vType $vName = $vValue;"
+        return "final $vType[] __$vName = new $vType[] { $vValue };"
     }
 
     override fun visitVariableAssignment(ctx: MiniKotlinParser.VariableAssignmentContext): String {
         val vName = ctx.IDENTIFIER().text
         val vValue = visit(ctx.expression())
-        return "$vName = $vValue;"
+        return "__$vName[0] = $vValue;"
     }
 
     /** intentionally unimplemented, these shouldn't even be called or present in the call-stack at any point
@@ -245,7 +251,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     }
 
     override fun visitIdentifierExpr(ctx: MiniKotlinParser.IdentifierExprContext): String {
-        return ctx.text
+        return "__${ctx.text}[0]"
     }
 
     override fun visitArgumentList(ctx: MiniKotlinParser.ArgumentListContext): String {
@@ -333,7 +339,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 val expression = ctx.expression()
 
                 unrollExpression(expression) { finalResult ->
-                    val assignment = "$vType $vName = $finalResult;"
+                    val assignment = "final $vType[] __$vName = new $vType[] { $finalResult };"
                     if (fCode != "") {
                         "$assignment\n$fCode"
                     } else {
@@ -347,7 +353,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 val expression = ctx.expression()
 
                 unrollExpression(expression) { finalResult ->
-                    val assignment = "$$vName = $finalResult;"
+                    val assignment = "__$vName[0] = $finalResult;"
                     if (fCode != "") {
                         "$assignment\n$fCode"
                     } else {
