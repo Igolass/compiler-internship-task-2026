@@ -371,19 +371,9 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
 
             is MiniKotlinParser.WhileStatementContext -> {
                 val condition = visit(ctx.expression())
-                val body = visit(ctx.block())
+                val bodyWithReentry = visitBlockWithContinuation(ctx.block(), "this.loop();")
 
-                // TODO: this also needs to be altered as the rest of the strings, but maybe make a helper method to make it cleaner here (?)
-                """new Object() {
-                    public void loop() {
-                       if ($condition) {
-                           $body
-                           this.loop();
-                       } else {
-                           $fCode
-                       }
-                    }
-                }.loop();"""
+                constructWhileString(condition, bodyWithReentry, fCode)
             }
 
             else -> throw IllegalStateException("Unsupported context type for CPS wrapping: ${ctx.javaClass.simpleName}")
@@ -422,6 +412,27 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
 
         return onComplete(visit(ctx))
+    }
+
+    private fun constructWhileString(condition: String, whileIfBody: String, whileElseBody: String): String {
+        // staying compliant to our current string building pattern, we build our transpiled while in steps, aiming for the following
+        /**
+        new Object() {
+            public void loop() {
+                if ($condition) {
+                    $bodyWithReentry
+                } else {
+                    $fCode
+                }
+            }
+        }.loop();
+         */
+
+        val loopBody = "if($condition) {\n${whileIfBody.prependIndent("    ")}\n} else {\n${whileElseBody.prependIndent("    ")}\n}"
+        val loopDefinition = "public void loop() {\n${loopBody.prependIndent("    ")}\n}"
+        val completedLoopObject = "new Object {\n${loopDefinition.prependIndent("    ")}\n}.loop()"
+
+        return completedLoopObject
     }
 
     // to not change the overridable implementation of the visitBlock(),
