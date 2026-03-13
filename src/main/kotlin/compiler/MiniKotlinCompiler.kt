@@ -428,9 +428,9 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }.loop();
          */
 
-        val loopBody = "if($condition) {\n${whileIfBody.prependIndent("    ")}\n} else {\n${whileElseBody.prependIndent("    ")}\n}"
-        val loopDefinition = "public void loop() {\n${loopBody.prependIndent("    ")}\n}"
-        val completedLoopObject = "new Object {\n${loopDefinition.prependIndent("    ")}\n}.loop()"
+        val loopBody = "if ($condition) {\n${whileIfBody.prependIndent("    ")}\n} else {\n${whileElseBody.prependIndent("    ")}\n}"
+        val loopDefinition = "public final void loop() {\n${loopBody.prependIndent("    ")}\n}"
+        val completedLoopObject = "new Object() {\n${loopDefinition.prependIndent("    ")}\n}.loop();"
 
         return completedLoopObject
     }
