@@ -48,7 +48,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     override fun visitProgram(ctx: MiniKotlinParser.ProgramContext): String {
         val transpiledText = StringBuilder()
 
-        // a program is defined as a non-zero series of functions - hence we isolate and parse them individually, their parsing will not interact with each other
         val functions = ctx.functionDeclaration()
         for (function in functions) {
             transpiledText.append(visit(function) + "\n\n")
@@ -108,35 +107,12 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         // let's push all block's statements onto a stack and then process them
         val statementStack: ArrayDeque<ParserRuleContext> = ArrayDeque()
         statements.forEach { statementStack.addLast(it) }
-
         val futureCodeList: ArrayDeque<String> = ArrayDeque()
-        // we must account for the case of a :Unit function that is full of trivial expressions and has no return, for these purposes we inject a dummy return at the end
         if (shouldPrefixStatementsWithReturn(ctx.parent as ParserRuleContext)) {
             futureCodeList.addLast("__continuation.accept(null);\nreturn;")
         }
 
-        while (statementStack.isNotEmpty()) {
-            // pop statement, get its actual ruleContext since that is how ANTLR works with such rules
-            val statement = statementStack.removeLast()
-            val actualStatement = if (statement is MiniKotlinParser.StatementContext) {
-                statement.getChild(0) as ParserRuleContext
-            } else {
-                statement
-            }
-
-            if (requiresCPS(actualStatement)) {
-                val joinedFuture = futureCodeList.joinToString("\n")
-                val wrapped = wrapInCPS(actualStatement, joinedFuture)
-
-                futureCodeList.clear()
-                futureCodeList.addLast(wrapped)
-            } else {
-                // we do not require CPS, so transpile this lucky piece of code directly and prepend it
-                futureCodeList.addFirst(visit(actualStatement))
-            }
-        }
-
-        return futureCodeList.joinToString("\n")
+        return processStatements(statementStack, futureCodeList)
     }
 
     // these are only going to be invoked in the trivial situation where we have nothing inside these of them to unravel, as such they can treat their contents as trivial for purposes of CPS
@@ -264,7 +240,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     }
 
     /** Helpers */
-    // we are looking back here, which I am not a fan of, but this is the cleanest stateless way to achieve the desired functionality
     private fun shouldPrefixStatementsWithReturn(ctx: ParserRuleContext): Boolean {
         return when (ctx) {
             is MiniKotlinParser.FunctionDeclarationContext -> ctx.type().text == "Unit" && ctx.IDENTIFIER().text != "main"
@@ -448,12 +423,15 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         if (statements.isEmpty()) {
             return tailCode
         }
-
         val statementStack: ArrayDeque<ParserRuleContext> = ArrayDeque()
         statements.forEach { statementStack.addLast(it) }
         val futureCodeList: ArrayDeque<String> = ArrayDeque()
         futureCodeList.addLast(tailCode)
 
+        return processStatements(statementStack, futureCodeList)
+    }
+
+    private fun processStatements(statementStack: ArrayDeque<ParserRuleContext>, futureCodeList: ArrayDeque<String>): String {
         while (statementStack.isNotEmpty()) {
             val statement = statementStack.removeLast()
             val actualStatement = if (statement is MiniKotlinParser.StatementContext) {
