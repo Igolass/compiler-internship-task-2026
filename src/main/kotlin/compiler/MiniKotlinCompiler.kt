@@ -52,7 +52,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         for (function in functions) {
             transpiledText.append(visit(function) + "\n\n")
         }
-        return transpiledText.toString()
+        return transpiledText.toString().trim().prependIndent("    ")
     }
 
     override fun visitFunctionDeclaration(ctx: MiniKotlinParser.FunctionDeclarationContext): String {
@@ -89,11 +89,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
         val transpiledBody = visit(fBlock)
 
-        return """
-        $transpiledSignature {
-            $transpiledBody
-        }
-        """.trimIndent()
+        return "$transpiledSignature {\n${transpiledBody.prependIndent("    ")}\n}"
     }
 
     override fun visitBlock(ctx: MiniKotlinParser.BlockContext): String {
@@ -132,7 +128,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             }
         }
 
-        // TODO: in order to fix the indent, lets make a custom joinToString method that works by popping, indenting, and repeating
         return futureCodeList.joinToString("\n")
     }
 
@@ -307,15 +302,9 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     private fun wrapInCPS(ctx: ParserRuleContext, fCode: String): String {
         return when (ctx) {
             is MiniKotlinParser.ReturnStatementContext -> {
-                val expression = ctx.expression() ?: return """
-                    __continuation.accept(null);
-                    return;
-                """.trimIndent()
+                val expression = ctx.expression() ?: return "__continuation.accept(null);\nreturn;"
 
-                unrollExpression(expression) { finalResult -> """
-                    __continuation.accept(${finalResult});
-                    return;
-                """.trimIndent()
+                unrollExpression(expression) { finalResult -> "__continuation.accept(${finalResult});\nreturn;"
                 }
             }
 
@@ -329,11 +318,12 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 val arguments = visit(ctx.argumentList())
                 val argCPS = "arg${nestingCounter++}"
 
-                """
-                $functionName($arguments, ($argCPS) -> {
-                    $fCode
-                });
-                """.trimIndent()
+                val correctedWrappingFutureCode = if (fCode != "") {
+                    "\n${fCode.prependIndent("    ")}\n"
+                } else {
+                    ""
+                }
+                "$functionName($arguments, ($argCPS) -> {$correctedWrappingFutureCode});"
             }
 
             is MiniKotlinParser.VariableDeclarationContext -> {
@@ -343,11 +333,12 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 val callFuncName = callExpression.IDENTIFIER().text
                 val callArguments = visit(callExpression.argumentList())
 
-                """
-                $callFuncName($callArguments, ($vName) -> {
-                    $fCode
-                });
-                """.trimIndent()
+                val correctedWrappingFutureCode = if (fCode != "") {
+                    "\n${fCode.prependIndent("    ")}\n"
+                } else {
+                    ""
+                }
+                "$callFuncName($callArguments, ($vName) -> {$correctedWrappingFutureCode});"
             }
 
             is MiniKotlinParser.VariableAssignmentContext -> {
@@ -357,11 +348,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 val callFuncName = callExpression.IDENTIFIER().text
                 val callArguments = visit(callExpression.argumentList())
 
-                """
-                $callFuncName($callArguments, ($vName) -> {
-                    $fCode
-                });
-                """.trimIndent()
+                "$callFuncName($callArguments, ($vName) -> {\n${fCode.prependIndent("    ")}\n});"
             }
 
             is MiniKotlinParser.IfStatementContext -> {
@@ -369,27 +356,20 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 // visit the branches, false might not exist, so we have to be more careful with it
                 val tBranch = visitBlockWithContinuation(ctx.block(0), fCode)
                 val fBranch = if (ctx.block().size > 1) {
-                    """ else {
-                        ${visitBlockWithContinuation(ctx.block(1), fCode)}
-                    }
-                    """.trimIndent()
+                    " else {\n${visitBlockWithContinuation(ctx.block(1), fCode).prependIndent("    ")}\n}"
                 } else {
                     ""
                 }
 
-                """
-                if ($condition) {
-                    $tBranch
-                } $fBranch
-                """.trimIndent()
+                "if ($condition) {\n${tBranch.prependIndent("    ")}\n} $fBranch"
             }
 
             is MiniKotlinParser.WhileStatementContext -> {
                 val condition = visit(ctx.expression())
                 val body = visit(ctx.block())
 
-                """
-                new Object() {
+                // TODO: this also needs to be altered as the rest of the strings, but maybe make a helper method to make it cleaner here (?)
+                """new Object() {
                     public void loop() {
                        if ($condition) {
                            $body
@@ -398,8 +378,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                            $fCode
                        }
                     }
-                }.loop();
-                """.trimIndent()
+                }.loop();"""
             }
 
             else -> throw IllegalStateException("Unsupported context type for CPS wrapping: ${ctx.javaClass.simpleName}")
@@ -420,11 +399,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             val arguments = visit(ctx.argumentList())
             val argCPS = "arg${nestingCounter++}"
 
-            return """
-            $functionName($arguments, ($argCPS) -> {
-                ${onComplete(argCPS)}
-            });
-            """.trimIndent()
+            return "$functionName($arguments, ($argCPS) -> {\n${onComplete(argCPS).prependIndent("    ")}\n});"
         }
 
         // handling binary operators, which have three children at this level (not counting their own potential nesting)
