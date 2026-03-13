@@ -33,6 +33,8 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     private var encounteredFunctions: MutableSet<String> = mutableSetOf()
     private var encounteredVariables: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
+    private var nestingCounter = 0
+
     fun compile(program: MiniKotlinParser.ProgramContext, className: String = "MiniProgram"): String {
         val transpiledText: StringBuilder = StringBuilder()
         transpiledText
@@ -50,6 +52,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         val functions = ctx.functionDeclaration()
         for (function in functions) {
             transpiledText.append(visit(function) + "\n\n")
+            nestingCounter = 0
         }
         return transpiledText.toString().trim().prependIndent("    ")
     }
@@ -297,7 +300,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         return false
     }
 
-    private var nestingCounter = 0
     private fun wrapInCPS(ctx: ParserRuleContext, fCode: String): String {
         return when (ctx) {
             is MiniKotlinParser.ReturnStatementContext -> {
