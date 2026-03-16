@@ -1,0 +1,17 @@
+fun condition1(dummy: Int): Boolean {
+    println("condition1 evaluated")
+    return false
+}
+
+fun condition2(dummy: Int): Boolean {
+    println("condition2 evaluated")
+    return true
+}
+
+fun main(): Unit {
+    if (condition1(0) && condition2(0)) {
+        println("result: true")
+    } else {
+        println("result: false")
+    }
+}

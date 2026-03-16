@@ -28,6 +28,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         "java.lang.Object"
     })
 
+    // TODO: finish the failfast methodology, we will have to keep two sets of tables - asked and delivered, java can accept this but it is not clarified for miniKotlin
     // these are used to perform sanity checks, since a program may be syntax-valid but semantic-invalid/ unsound
     // additionally, this provides a fail-fast mechanism that also informs the user of these types of errors in miniKotlin, not generated Java
     private var encounteredFunctions: MutableSet<String> = mutableSetOf()
@@ -281,6 +282,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         return false
     }
 
+    // TODO: change the recursive logic into a stack-machine similar to visit FunctionDeclaration processing of statements
     private fun wrapInCPS(ctx: ParserRuleContext, fCode: String): String {
         return when (ctx) {
             is MiniKotlinParser.ReturnStatementContext -> {
@@ -338,23 +340,24 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             }
 
             is MiniKotlinParser.IfStatementContext -> {
-                val condition = visit(ctx.expression())
-                // visit the branches, false might not exist, so we have to be more careful with it
-                val tBranch = visitBlockWithContinuation(ctx.block(0), fCode)
-                val fBranch = if (ctx.block().size > 1) {
-                    " else {\n${visitBlockWithContinuation(ctx.block(1), fCode).prependIndent("    ")}\n}"
-                } else {
-                    ""
-                }
+                unrollExpression(ctx.expression()) { condition ->
+                    val tBranch = visitBlockWithContinuation(ctx.block(0), fCode)
+                    val fBranch = if (ctx.block().size > 1) {
+                        " else {\n${visitBlockWithContinuation(ctx.block(1), fCode).prependIndent("    ")}\n}"
+                    } else {
+                        " else {\n${fCode.prependIndent("    ")}\n}"
+                    }
 
-                "if ($condition) {\n${tBranch.prependIndent("    ")}\n} $fBranch"
+                    "if ($condition) {\n${tBranch.prependIndent("    ")}\n}$fBranch"
+                }
             }
 
             is MiniKotlinParser.WhileStatementContext -> {
-                val condition = visit(ctx.expression())
-                val bodyWithReentry = visitBlockWithContinuation(ctx.block(), "this.loop();")
+                unrollExpression(ctx.expression()) { condition ->
+                    val bodyWithReentry = visitBlockWithContinuation(ctx.block(), "this.loop();")
 
-                constructWhileString(condition, bodyWithReentry, fCode)
+                    constructWhileString(condition, bodyWithReentry, fCode)
+                }
             }
 
             else -> throw IllegalStateException("Unsupported context type for CPS wrapping: ${ctx.javaClass.simpleName}")
@@ -384,6 +387,20 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             val lOperand = ctx.getChild(0) as RuleContext
             val op = ctx.getChild(1).text
             val rOperand = ctx.getChild(2) as RuleContext
+
+            if (op == "&&") {
+                return unrollExpression(lOperand) { leftRes ->
+                    val argCPS = "arg${nestingCounter++}"
+                    "if ($leftRes) {\n${unrollExpression(rOperand) { rightRes -> onComplete(rightRes) }.prependIndent("    ")}\n} else {\n${onComplete("false").prependIndent("    ")}\n}"
+                }
+            }
+
+            if (op == "||") {
+                return unrollExpression(lOperand) { leftRes ->
+                    val argCPS = "arg${nestingCounter++}"
+                    "if ($leftRes) {\n${onComplete("true").prependIndent("    ")}\n} else {\n${unrollExpression(rOperand) { rightRes -> onComplete(rightRes) }.prependIndent("    ")}\n}"
+                }
+            }
 
             return unrollExpression(lOperand) { leftRes ->
                 unrollExpression(rOperand) { rightRes ->
