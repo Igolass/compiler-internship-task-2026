@@ -1,0 +1,4 @@
+fun main(): Unit {
+    var a: Int = 1
+    var a: Int = 2
+}

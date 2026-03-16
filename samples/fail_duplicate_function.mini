@@ -1,0 +1,11 @@
+fun duplicate(x: Int): Int {
+    return x
+}
+
+fun duplicate(x: Int): Int {
+    return x * 2
+}
+
+fun main(): Unit {
+    println("This should fail during compilation")
+}

@@ -28,11 +28,10 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         "java.lang.Object"
     })
 
-    // TODO: finish the failfast methodology, we will have to keep two sets of tables - asked and delivered, java can accept this but it is not clarified for miniKotlin
-    // these are used to perform sanity checks, since a program may be syntax-valid but semantic-invalid/ unsound
-    // additionally, this provides a fail-fast mechanism that also informs the user of these types of errors in miniKotlin, not generated Java
-    private var encounteredFunctions: MutableSet<String> = mutableSetOf()
-    private var encounteredVariables: MutableMap<String, MutableSet<String>> = mutableMapOf()
+    private var definedFunctions: MutableSet<String> = mutableSetOf()
+    private var requestedFunctions: MutableSet<String> = mutableSetOf()
+    private var definedVariables: MutableSet<String> = mutableSetOf()
+    private var requestedVariables: MutableSet<String> = mutableSetOf()
 
     private var nestingCounter = 0
 
@@ -52,8 +51,12 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         val functions = ctx.functionDeclaration()
         for (function in functions) {
             transpiledText.append(visit(function) + "\n\n")
+
+            sanitizeThrough(definedVariables, requestedVariables)
             nestingCounter = 0
         }
+        sanitizeThrough(definedFunctions, requestedFunctions)
+
         return transpiledText.toString().trim().prependIndent("    ")
     }
 
@@ -65,10 +68,10 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         val fBlock = ctx.block()
 
         // sanity check, has this function been encountered before?
-        if (encounteredFunctions.contains(name)) {
+        if (definedFunctions.contains(name)) {
             throw IllegalStateException("Function $name has already been defined, panicking...")
         }
-        encounteredFunctions.add(name)
+        definedFunctions.add(name)
 
         var boxedParameters: String = ""
         val transpiledParameters: String = if (parameters.isEmpty()) {
@@ -122,12 +125,23 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         val vType = syntaxMapper[ctx.type().text]
         val vValue = visit(ctx.expression())
 
+        if (definedVariables.contains("$vName")) {
+            // we treat shadowing as an error
+            throw IllegalStateException("Variable $vName has already been defined, panicking...")
+        }
+        definedVariables.add("$vName")
+        
         return "final $vType[] __$vName = new $vType[] { $vValue };"
     }
 
     override fun visitVariableAssignment(ctx: MiniKotlinParser.VariableAssignmentContext): String {
         val vName = ctx.IDENTIFIER().text
         val vValue = visit(ctx.expression())
+
+        if (!requestedVariables.contains("$vName")) {
+            requestedVariables.add("$vName")
+        }
+
         return "__$vName[0] = $vValue;"
     }
 
@@ -288,8 +302,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             is MiniKotlinParser.ReturnStatementContext -> {
                 val expression = ctx.expression() ?: return "__continuation.accept(null);\nreturn;"
 
-                unrollExpression(expression) { finalResult -> "__continuation.accept(${finalResult});\nreturn;"
-                }
+                unrollExpression(expression) { finalResult -> "__continuation.accept(${finalResult});\nreturn;" }
             }
 
             is MiniKotlinParser.FunctionCallExprContext -> {
@@ -297,6 +310,10 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 // we replace any print call to Prelude's version, as that is what is provided to us
                 if (functionName.contains("print")) {
                     functionName = "Prelude.println"
+                } else {
+                    if (!requestedFunctions.contains(functionName)) {
+                        requestedFunctions.add(functionName)
+                    }
                 }
 
                 val arguments = visit(ctx.argumentList())
@@ -315,6 +332,12 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
                 val vType = syntaxMapper[ctx.type().text]
                 val expression = ctx.expression()
 
+                if (definedVariables.contains("$vName")) {
+                    // we treat shadowing as an error
+                    throw IllegalStateException("Variable $vName has already been defined, panicking...")
+                }
+                definedVariables.add("$vName")
+
                 unrollExpression(expression) { finalResult ->
                     val assignment = "final $vType[] __$vName = new $vType[] { $finalResult };"
                     if (fCode != "") {
@@ -328,6 +351,10 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             is MiniKotlinParser.VariableAssignmentContext -> {
                 val vName = ctx.IDENTIFIER().text
                 val expression = ctx.expression()
+
+                if (!requestedVariables.contains("$vName")) {
+                    requestedVariables.add("$vName")
+                }
 
                 unrollExpression(expression) { finalResult ->
                     val assignment = "__$vName[0] = $finalResult;"
@@ -373,6 +400,10 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
             var functionName = ctx.IDENTIFIER().text
             if (functionName.contains("print")) {
                 functionName = "Prelude.println"
+            } else {
+                if (!requestedFunctions.contains(functionName)) {
+                    requestedFunctions.add(functionName)
+                }
             }
 
             val arguments = visit(ctx.argumentList())
@@ -433,8 +464,6 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         return completedLoopObject
     }
 
-    // to not change the overridable implementation of the visitBlock(),
-    // we make an alternative for cases that require block processing which accepts a future, for example processing blocks inside if-else and while
     private fun visitBlockWithContinuation(ctx: MiniKotlinParser.BlockContext, tailCode: String): String {
         val statements = ctx.statement()
         if (statements.isEmpty()) {
@@ -468,5 +497,16 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         }
 
         return futureCodeList.joinToString("\n")
+    }
+
+    private fun sanitizeThrough(defined: MutableSet<String>, requested: MutableSet<String>) {
+        if (defined != requested) {
+            if (!defined.containsAll(requested)) {
+                throw IllegalStateException("Mismatch detected: defined=$defined, requested=$requested")
+            }
+        }
+
+        defined.clear()
+        requested.clear()
     }
 }
