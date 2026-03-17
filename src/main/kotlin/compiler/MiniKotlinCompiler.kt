@@ -8,9 +8,7 @@ import org.antlr.v4.runtime.ParserRuleContext
 import org.antlr.v4.runtime.RuleContext
 
 class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
-    // mapping Kotlin->Java syntax equivalents as map, so we can easily transpile syntax
     private val syntaxMapper: Map<String, String> = mapOf(
-        // observing MiniKotlin.g4:95 ...
         "Int" to "Integer",
         "String" to "String",
         "Boolean" to "Boolean",

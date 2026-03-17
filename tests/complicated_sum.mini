@@ -1,0 +1,16 @@
+fun factorial(n: Int): Int {
+    if (n <= 1) {
+        return 1
+    } else {
+        return n * factorial(n - 1)
+    }
+}
+
+fun complicatedSum(x: Int, y: Int): Int {
+    return factorial(x) + factorial(y)
+}
+
+fun main(): Unit {
+    var res: Int = complicatedSum(3, 4)
+    println(res)
+}

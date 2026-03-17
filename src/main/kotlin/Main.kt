@@ -61,7 +61,7 @@ fun compileAndRunJava(path: String, args: Array<String> = emptyArray()): Pair<Co
 }
 
 fun main(args: Array<String>) {
-    val inputPath = args.firstOrNull() ?: "samples/example.mini"
+    val inputPath = args.firstOrNull() ?: "tests/example.mini"
 
     // 1. Parse the .mini file
     val program = parseFile(inputPath)

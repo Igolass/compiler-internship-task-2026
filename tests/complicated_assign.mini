@@ -1,0 +1,16 @@
+fun factorial(n: Int): Int {
+    if (n <= 1) {
+        return 1
+    } else {
+        return n * factorial(n - 1)
+    }
+}
+
+fun complicatedVarAssignDeclare(x: Int): Unit {
+    var y: Int = 7 + factorial(x)
+    println(y)
+}
+
+fun main(): Unit {
+    complicatedVarAssignDeclare(5)
+}

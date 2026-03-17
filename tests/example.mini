@@ -1,0 +1,17 @@
+// Function to calculate factorial
+fun factorial(n: Int): Int {
+    if (n <= 1) {
+        return 1
+    } else {
+        return n * factorial(n - 1)
+    }
+}
+
+fun main(): Unit {
+    var result: Int = factorial(5)
+    println(result)
+
+    var a: Int = 10 + 5
+    var b: Boolean = a > 10
+    println(a)
+}

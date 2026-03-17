@@ -1,0 +1,12 @@
+fun countdown(n: Int): Unit {
+    var i: Int = n
+    while (i > 0) {
+        println(i)
+        i = i - 1
+    }
+    println("finished")
+}
+
+fun main(): Unit {
+    countdown(5)
+}
