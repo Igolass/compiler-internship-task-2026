@@ -6,6 +6,7 @@ import MiniKotlinParser
 // our additions to the import block
 import org.antlr.v4.runtime.ParserRuleContext
 import org.antlr.v4.runtime.RuleContext
+import javax.lang.model.type.ArrayType
 
 class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     private val syntaxMapper: Map<String, String> = mapOf(
@@ -106,7 +107,7 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
         if (statements.isEmpty()) {
             return ""
         }
-        // let's push all block's statements onto a stack and then process them
+
         val statementStack: ArrayDeque<ParserRuleContext> = ArrayDeque()
         statements.forEach { statementStack.addLast(it) }
         val futureCodeList: ArrayDeque<String> = ArrayDeque()
@@ -264,33 +265,49 @@ class MiniKotlinCompiler : MiniKotlinBaseVisitor<String>() {
     }
 
     private fun requiresCPS(ctx: ParserRuleContext): Boolean {
-        return when (ctx) {
-            // explicitly as per CPS, these always require CPS
-            is MiniKotlinParser.FunctionCallExprContext -> true
-            is MiniKotlinParser.ReturnStatementContext -> true
+        val stack: ArrayDeque<ParserRuleContext> = ArrayDeque()
+        stack.add(ctx)
 
-            // these can contain an inner expression, but these should be treated as inherent CPS
-            is MiniKotlinParser.IfStatementContext -> true
-            is MiniKotlinParser.WhileStatementContext -> true
+        while (stack.isNotEmpty()) {
+            when (val current = stack.removeLast()) {
+                is MiniKotlinParser.FunctionCallExprContext -> return true
+                is MiniKotlinParser.ReturnStatementContext -> return true
 
-            // again, these CAN contain an inner expression, so we perform an analogous check
-            is MiniKotlinParser.VariableDeclarationContext -> containsFunctionCall(ctx.expression())
-            is MiniKotlinParser.VariableAssignmentContext -> containsFunctionCall(ctx.expression())
+                // these can contain an inner expression, but these should be treated as inherent CPS
+                is MiniKotlinParser.IfStatementContext -> return true
+                is MiniKotlinParser.WhileStatementContext -> return true
 
-            is MiniKotlinParser.StatementContext -> {
-                val child = ctx.getChild(0) as? ParserRuleContext ?: return false
-                requiresCPS(child)
+                is MiniKotlinParser.VariableDeclarationContext -> return containsFunctionCall(current.expression())
+                is MiniKotlinParser.VariableAssignmentContext -> return containsFunctionCall(current.expression())
+
+                is MiniKotlinParser.StatementContext -> {
+                    val child = current.getChild(0) as? ParserRuleContext ?: return false
+                    stack.addLast(child)
+                }
+
+                else -> return false
             }
-
-            else -> false
         }
+
+        return false
     }
 
     private fun containsFunctionCall(ctx: ParserRuleContext): Boolean {
-        if (ctx is MiniKotlinParser.FunctionCallExprContext) return true
-        for (child in ctx.children) {
-            if (child is ParserRuleContext && containsFunctionCall(child)) return true
+        val stack: ArrayDeque<ParserRuleContext> = ArrayDeque()
+        stack.add(ctx)
+
+        while (stack.isNotEmpty()) {
+            val current = stack.removeLast()
+            if (current is MiniKotlinParser.FunctionCallExprContext) return true
+
+            for (i in 0 until current.childCount) {
+                val child = current.getChild(i)
+                if (child is ParserRuleContext) {
+                    stack.addLast(child)
+                }
+            }
         }
+
         return false
     }
 
